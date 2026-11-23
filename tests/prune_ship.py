@@ -1,4 +1,7 @@
-import sys
+import sys, os, pathlib
+SHIP = pathlib.Path(__file__).resolve().parent.parent / "app" / "questlog.html"
+assert SHIP.exists(), SHIP
+SHIP_URL = SHIP.as_uri()
 from playwright.sync_api import sync_playwright
 res=[]
 def t(n,c,d=""): res.append(bool(c)); print(("PASS " if c else "FAIL ")+n+((" :: "+str(d)) if d and not c else ""))
@@ -23,7 +26,8 @@ with sync_playwright() as pw:
     b=pw.chromium.launch(); c=b.new_context(); p=c.new_page(); viol=[];reqs=[]
     p.on("console",lambda m:viol.append(m.text) if "Content Security Policy" in m.text or "violates" in m.text else None)
     p.on("request",lambda r:reqs.append(r.url) if not r.url.startswith(("data:","blob:","file:")) else None)
-    p.goto("file:///mnt/user-data/outputs/questlog-supabase.html"); p.wait_for_timeout(1500)
+    p.route("https://ispuunotdlmpduscynsf.supabase.co/**", lambda r: r.fulfill(status=400, content_type="application/json", headers={"access-control-allow-origin":"*"}, body='{"error":"invalid_grant","error_description":"Invalid login credentials"}'))  # tests never contact the real project
+    p.goto(SHIP_URL); p.wait_for_timeout(1500)
     t("ship build: bundled library present",p.evaluate("typeof window.supabase?.createClient==='function'"))
     t("ship build: app renders",p.evaluate("typeof S==='object'&&document.querySelectorAll('nav button, .tab').length>0 || document.body.innerText.length>50"))
     t("ship build: no CSP violations on load",not viol,viol[:2])
@@ -35,7 +39,7 @@ with sync_playwright() as pw:
     t("ship build: the policy refuses eval in page scripts",ev==0,ev)
     r=p.evaluate("sbClient().auth.signInWithPassword({email:'nobody@example.com',password:'abcdef'}).then(x=>({err:!!x.error,msg:(x.error&&x.error.message||'').slice(0,80)}),e=>({thrown:String(e).slice(0,80)}))")
     t("ship build: sign-in with the real library fails gracefully (no crash) when the server cannot be reached or rejects",('err' in r and r['err']) ,r)
-    html=open(__import__("os").path.abspath("../app/questlog.html"),encoding="utf-8").read()
+    html=open(SHIP,encoding="utf-8").read()
     t("shipped app only calls the deletion function with a password", html.count('rpc("delete_my_account"')==1 and 'rpc("delete_my_account",{p_password:' in html and 'rpc("delete_my_account")' not in html)
     t("shipped app no longer re-signs in client-side to 'check' the password before deleting", 'signInWithPassword({email:CLOUD.name' not in html)
     b.close()

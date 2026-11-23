@@ -29,3 +29,5 @@ for k,v in out.items():
 print("views checked:",len(out),"; views with violations:",sum(1 for v in out.values() if v))
 for (i,imp,h),lst in sorted(agg.items(),key=lambda z:str(z[0][1])):
     print(f"{imp} {i}: {h} — {len(lst)} views, e.g. {lst[0][0]} ({lst[0][1]} nodes) {lst[0][2]}"); print("   views:", ", ".join(x[0] for x in lst))
+# Fail the run (exit 1) if any view has a violation or the scan itself errored, so CI cannot pass silently.
+sys.exit(1 if any(out.values()) else 0)

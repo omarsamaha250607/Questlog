@@ -1,0 +1,30 @@
+name: Questlog tests
+# Runs on every push and pull request. Uses only free GitHub-hosted runners and a throwaway database inside the job.
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ci
+      AXE_PATH: ../node_modules/axe-core/axe.min.js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: pip install -r requirements.txt
+      - run: npm install
+      - run: python -m playwright install --with-deps chromium
+      - run: bash tests/run_all.sh

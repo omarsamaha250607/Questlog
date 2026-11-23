@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Questlog Supabase access test</title>
+<style>
+ body{font:15px/1.5 system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:#1a1d24;background:#fff}
+ @media (prefers-color-scheme:dark){body{background:#12151c;color:#e8eaf0}}
+ button{font:inherit;padding:10px 16px;border-radius:8px;border:1px solid #888;cursor:pointer}
+ .row{padding:4px 0;border-bottom:1px solid #8884;word-break:break-word}.pass{color:#1a8f4c}.fail{color:#d33;font-weight:600}
+ pre{white-space:pre-wrap;background:#8882;padding:10px;border-radius:8px}
+</style></head><body>
+<h1>Questlog Supabase access test</h1>
+<p>Creates two throwaway test accounts, checks that neither can read or change the other's data, and that signed-out visitors see nothing. It uses only the public key. It deletes the test rows it created (the two empty test accounts remain in Authentication; you can delete them in the dashboard). Your real progress is not touched.</p>
+<p><b>Recommended (sends no email):</b> create two test users in the dashboard under Authentication, Users, Add user, Create new user, with <i>Auto Confirm User</i> ticked, then enter them here.</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;max-width:640px">
+<label for="ea">Test user A email<input id="ea" type="email" autocomplete="off" style="display:block;width:100%;font:inherit;padding:8px;box-sizing:border-box"></label>
+<label for="pa">Test user A password<input id="pa" type="password" autocomplete="off" style="display:block;width:100%;font:inherit;padding:8px;box-sizing:border-box"></label>
+<label for="eb">Test user B email<input id="eb" type="email" autocomplete="off" style="display:block;width:100%;font:inherit;padding:8px;box-sizing:border-box"></label>
+<label for="pb">Test user B password<input id="pb" type="password" autocomplete="off" style="display:block;width:100%;font:inherit;padding:8px;box-sizing:border-box"></label>
+</div>
+<p style="margin-top:14px"><label for="base">Otherwise, sign-up path: your email address, used to build two test addresses. This needs Confirm email switched off, and the built-in sender allows only 2 emails an hour.</label><br><input id="base" type="email" autocomplete="email" placeholder="you@gmail.com" style="font:inherit;padding:8px;width:100%;max-width:360px;margin:6px 0;box-sizing:border-box"></p>
+<p><button id="run">Run the test</button> <button id="copy" hidden>Copy results</button></p>
+<div id="out"></div><pre id="json" hidden></pre>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+const URL_="https://ispuunotdlmpduscynsf.supabase.co", KEY="sb_publishable_HZITGHCFQp7VEtUNlrQMVA_AH-BgnDa";
+const out=document.getElementById("out"),results=[];let BASE="";
+function t(name,ok,detail){results.push({name,ok:!!ok,detail:ok?"":String(detail??"")});const d=document.createElement("div");d.className="row "+(ok?"pass":"fail");d.textContent=(ok?"PASS ":"FAIL ")+name+(ok?"":" :: "+String(detail??""));out.appendChild(d)}
+const mk=()=>supabase.createClient(URL_,KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+const rnd=()=>Math.random().toString(36).slice(2,10), pw=()=>rnd()+rnd()+"Aa1!";
+const today=new Date().toISOString().slice(0,10);
+const errOrEmpty=r=>!!r.error||!r.data||r.data.length===0;
+async function mkUser(label){
+  const e=document.getElementById("e"+label).value.trim(), p=document.getElementById("p"+label).value;
+  if(e&&p){const c=mk();const r=await c.auth.signInWithPassword({email:e,password:p});if(r.error)return{c,err:`sign-in as test user ${label.toUpperCase()} failed: ${r.error.message}`};return{c,id:r.data.user.id,email:e,preexisting:true}}
+  const c=mk(), m=BASE.match(/^([^@+\s]+)(?:\+[^@\s]*)?@([^@\s]+)$/), email=`${m[1]}+qa-${label}-${Date.now().toString(36)}${rnd().slice(0,4)}@${m[2]}`, password=pw();
+  const r=await c.auth.signUp({email,password});
+  if(r.error)return{c,err:r.error.message};
+  if(!r.data.session)return{c,err:"No session returned. 'Confirm email' is still switched on in Authentication > Providers > Email."};
+  return{c,id:r.data.user.id,email};
+}
+async function run(){
+  out.innerHTML="";results.length=0;document.getElementById("json").hidden=true;
+  const run=document.getElementById("run");run.disabled=true;
+  BASE=document.getElementById("base").value.trim();
+  const haveBoth=["ea","pa","eb","pb"].every(i=>document.getElementById(i).value.trim());
+  if(!haveBoth&&!/^[^@+\s]+(\+[^@\s]*)?@[^@\s]+\.[^@\s]+$/.test(BASE)){t("enter test users A and B, or your email address for the sign-up path",false,"Nothing to sign in with.");run.disabled=false;return}
+  if(haveBoth&&document.getElementById("ea").value.trim().toLowerCase()===document.getElementById("eb").value.trim().toLowerCase()){t("test users A and B must be different accounts",false,"Same email entered twice.");run.disabled=false;return}
+  try{
+    const anon=mk();
+    for(const tb of ["saves","save_backups","restore_points","devices"]){const r=await anon.from(tb).select("*");const code=r.error&&r.error.code;t(`${tb} exists and signed-out visitors are refused (permission denied)`,code==="42501"||(!r.error&&Array.isArray(r.data)&&r.data.length===0),`code=${code} ${r.error?r.error.message:""} (a missing table means the database script has not been run)`)}
+    const ins=await anon.from("saves").insert({user_id:"00000000-0000-0000-0000-000000000000",rev:1,device_id:"x",json:"{}"});t("signed-out visitor cannot insert a save",!!ins.error&&ins.error.code!=="PGRST205","code="+(ins.error&&ins.error.code));
+    const rp=await anon.rpc("push_save",{p_expected_rev:0,p_device:"x",p_json:"{}",p_name:"n",p_xp:1,p_gold:1,p_day:today});t("push_save exists and signed-out visitors cannot call it",!!rp.error&&rp.error.code!=="PGRST202","code="+(rp.error&&rp.error.code)+" "+(rp.error&&rp.error.message));
+
+    const A=await mkUser("a"), B=await mkUser("b");
+    if(A.err||B.err){t("create two test accounts",false,(A.err||B.err));return}
+    t("create two test accounts",A.id&&B.id&&A.id!==B.id);
+    const push=(u,exp,json,xp,backup,day)=>u.c.rpc("push_save",{p_expected_rev:exp,p_device:"dev-"+u.id.slice(0,4),p_json:json,p_name:"Test",p_xp:xp,p_gold:1,p_day:day||today,p_backup_replaced:!!backup});
+    let r=await push(A,0,'{"who":"A","v":1}',100);t("A: first save creates revision 1",!r.error&&r.data&&r.data[0].ok===true&&r.data[0].new_rev===1,JSON.stringify(r));
+    r=await A.c.from("saves").select("user_id,rev,json");t("A: reads only their own save",!r.error&&r.data.length===1&&r.data[0].user_id===A.id,JSON.stringify(r));
+    r=await B.c.from("saves").select("*");t("B: sees none of A's save",!r.error&&r.data.length===0,JSON.stringify(r.data));
+    r=await B.c.from("saves").insert({user_id:A.id,rev:1,device_id:"x",json:"{}"});t("B: cannot insert a save for A",!!r.error,"insert accepted");
+    r=await B.c.from("saves").update({xp:999}).eq("user_id",A.id).select();t("B: cannot change A's save",!r.error&&r.data.length===0,JSON.stringify(r));
+    r=await B.c.from("saves").update({rev:99}).eq("user_id",A.id).select();t("B: cannot change A's revision",!r.error&&r.data.length===0,JSON.stringify(r));
+    r=await B.c.from("saves").delete().eq("user_id",A.id).select();t("B: cannot delete A's save",!r.error&&r.data.length===0,JSON.stringify(r));
+    r=await A.c.from("saves").select("xp,rev");t("A: save unchanged after B's attempts",!r.error&&r.data[0].xp===100&&r.data[0].rev===1,JSON.stringify(r));
+    r=await push(B,0,'{"who":"B","v":1}',7);t("B: creates their own save (revision 1)",!r.error&&r.data[0].ok===true&&r.data[0].new_rev===1,JSON.stringify(r));
+    r=await A.c.from("saves").select("json");t("A: still sees only A's data",!r.error&&r.data.length===1&&r.data[0].json.includes('"A"'),JSON.stringify(r));
+
+    r=await push(A,0,'{"x":1}',1);t("stale revision is reported as a conflict, nothing changed",!r.error&&r.data[0].ok===false&&r.data[0].new_rev===1,JSON.stringify(r));
+    r=await push(A,1,'{"who":"A","v":2}',150,true);t("correct revision saves (revision 2)",!r.error&&r.data[0].ok===true&&r.data[0].new_rev===2,JSON.stringify(r));
+    r=await A.c.from("restore_points").select("json,rev");t("first change of the day keeps a restore point of the earlier copy",!r.error&&r.data.length===1&&r.data[0].json==='{"who":"A","v":1}'&&r.data[0].rev===1,JSON.stringify(r));
+    r=await A.c.from("save_backups").select("json").eq("kind","replaced");t("overwrite keeps a 'replaced' backup",!r.error&&r.data.length===1&&r.data[0].json==='{"who":"A","v":1}',JSON.stringify(r));
+    r=await push(A,2,'{"who":"A","v":3}',160);t("second change the same day saves (revision 3)",!r.error&&r.data[0].ok===true&&r.data[0].new_rev===3,JSON.stringify(r));
+    r=await A.c.from("restore_points").select("json");t("same-day change does not replace the restore point",!r.error&&r.data.length===1&&r.data[0].json==='{"who":"A","v":1}',JSON.stringify(r));
+    r=await push(A,3,"x".repeat(300001),1);t("oversize save is rejected",!!r.error,JSON.stringify(r.data));
+    r=await A.c.from("saves").select("rev");t("oversize attempt changed nothing",!r.error&&r.data[0].rev===3,JSON.stringify(r));
+
+    r=await B.c.from("restore_points").select("*");t("B: sees none of A's restore points",!r.error&&r.data.length===0,JSON.stringify(r.data));
+    r=await B.c.from("save_backups").select("*");t("B: sees none of A's backups",!r.error&&r.data.length===0,JSON.stringify(r.data));
+    r=await A.c.from("devices").insert({user_id:A.id,device_id:"dev-a",label:"Test device"});t("A: can register a device",!r.error,JSON.stringify(r.error));
+    r=await B.c.from("devices").insert({user_id:A.id,device_id:"evil",label:"x"});t("B: cannot register a device for A",!!r.error,"insert accepted");
+    r=await B.c.from("devices").select("*");t("B: sees none of A's devices",!r.error&&r.data.length===0,JSON.stringify(r.data));
+    r=await B.c.from("devices").update({revoked_at:new Date().toISOString()}).eq("user_id",A.id).select();t("B: cannot disconnect A's device",!r.error&&r.data.length===0,JSON.stringify(r));
+    r=await B.c.from("save_backups").insert({user_id:A.id,kind:"pull",json:"{}"});t("B: cannot write a backup for A",!!r.error,"insert accepted");
+    r=await B.c.from("restore_points").insert({user_id:A.id,slot:0,day:today,json:"{}"});t("B: cannot write a restore point for A",!!r.error,"insert accepted");
+
+    // live updates: B's session should hear A's changes only if allowed; here we check B hears nothing about A
+    let heard=0;const ch=B.c.channel("t-"+rnd()).on("postgres_changes",{event:"*",schema:"public",table:"saves"},()=>{heard++}).subscribe();
+    await new Promise(res=>setTimeout(res,2500));
+    await push(A,3,'{"who":"A","v":4}',170);
+    await new Promise(res=>setTimeout(res,2500));
+    t("B receives no live updates about A's save",heard===0,"B heard "+heard+" change(s)");
+    await B.c.removeChannel(ch);
+    let heardA=0;const chA=A.c.channel("t2-"+rnd()).on("postgres_changes",{event:"UPDATE",schema:"public",table:"saves"},()=>{heardA++}).subscribe();
+    await new Promise(res=>setTimeout(res,2500));
+    await push(A,4,'{"who":"A","v":5}',180);
+    await new Promise(res=>setTimeout(res,3500));
+    t("A receives live updates about A's own save (needs Realtime; informational)",heardA>=1,"A heard "+heardA);
+    await A.c.removeChannel(chA);
+
+    // cleanup own rows
+    for(const u of [A,B]){for(const tb of ["devices","save_backups","restore_points","saves"]){await u.c.from(tb).delete().eq("user_id",u.id)}}
+    r=await A.c.from("saves").select("*");const r2=await B.c.from("saves").select("*");
+    t("test rows cleaned up",!r.error&&!r2.error&&r.data.length===0&&r2.data.length===0);
+  }catch(e){t("test run finished without an unexpected error",false,e&&e.message||e)}
+  finally{
+    const bad=results.filter(x=>!x.ok);
+    const s=document.createElement("h2");s.textContent=`${results.length-bad.length} of ${results.length} checks passed`+(bad.length?` (${bad.length} failed)`:"");out.prepend(s);
+    const j=document.getElementById("json");j.textContent=JSON.stringify(results,null,1);j.hidden=false;
+    const cp=document.getElementById("copy");cp.hidden=false;
+    cp.onclick=async()=>{try{await navigator.clipboard.writeText(j.textContent);cp.textContent="Copied"}catch(e){const r=document.createRange();r.selectNodeContents(j);getSelection().removeAllRanges();getSelection().addRange(r);cp.textContent="Select and copy the text below"}};
+    run.disabled=false;
+  }
+}
+document.getElementById("run").onclick=run;
+</script></body></html>

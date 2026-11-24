@@ -136,7 +136,7 @@ FAKE = """(()=>{
    resetPasswordForEmail:async(email,o)=>{let r;try{r=await call('reset',{email,redirect:o&&o.redirectTo})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
    resend:async({type,email,options})=>{window.__lastResend=options||null;let r;try{r=await call('resend',{email})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
    updateUser:async({password})=>{let r;try{r=await call('updateuser',{uid:uid(),password})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
-   signOut:async()=>{localStorage.removeItem(KEY);listeners.forEach(f=>f('SIGNED_OUT',null));return{error:null}},
+   signOut:async(o)=>{try{sessionStorage.setItem('__so',(o&&o.scope)||'global')}catch(e){}localStorage.removeItem(KEY);listeners.forEach(f=>f('SIGNED_OUT',null));return{error:null}},
    onAuthStateChange:cb=>{listeners.push(cb);return{data:{subscription:{unsubscribe(){}}}}}};
   window.__fire=ev=>listeners.forEach(f=>f(ev,sess()));
   const from=tb=>{const q={t:tb,op:'select',filters:{},row:null,single:false};
@@ -390,6 +390,24 @@ with sync_playwright() as pw:
     C.wait_for_selector("#offerGo"); C.click("#offerGo"); w(C, "CLOUD.state==='linked'&&CLOUD.sync==='idle'"); C.evaluate("localStorage.setItem('questlog_backup_before_import','{\"x\":1}');localStorage.setItem('ql_theme','dark')")
     C.evaluate("go('me');signOutSheet()")
     t("A13 sign-out sheet offers both choices", C.evaluate("!!document.getElementById('signOutGo')&&!!document.getElementById('clearOpen')"))
+    # ===== F23: Sign out is local by default; "all devices" is a separate choice =====
+    cF, F23, fF = ctx(br, uid="u_F23a", email="f23a@test.dev", local=legacy(xp=7, name="Fa"))
+    F23.wait_for_selector("#offerGo"); F23.click("#offerGo"); w(F23, "CLOUD.state==='linked'&&CLOUD.sync==='idle'")
+    F23.evaluate("go('me');signOutSheet()")
+    t("F23 sheet offers a separate Sign out on all devices and says other devices stay signed in", F23.evaluate("!!document.getElementById('signOutAll')") and "other devices" in F23.inner_text("#sheet"))
+    F23.evaluate("sessionStorage.removeItem('__so')"); F23.click("#signOutGo"); w(F23, "CLOUD.state==='signedout'")
+    t("F23 plain Sign out asks the server to end only this device (scope local)", F23.evaluate("sessionStorage.getItem('__so')")=="local")
+    cG, G23, fG = ctx(br, uid="u_F23b", email="f23b@test.dev", local=legacy(xp=8, name="Fb"))
+    G23.wait_for_selector("#offerGo"); G23.click("#offerGo"); w(G23, "CLOUD.state==='linked'&&CLOUD.sync==='idle'")
+    G23.evaluate("go('me');signOutSheet()"); G23.evaluate("sessionStorage.removeItem('__so')"); G23.click("#signOutAll"); w(G23, "CLOUD.state==='signedout'")
+    t("F23 Sign out on all devices uses scope global and still signs out here", G23.evaluate("sessionStorage.getItem('__so')")=="global")
+    cH, H23, fH = ctx(br, uid="u_F23c", email="f23c@test.dev", local=legacy(xp=9, name="Fc"))
+    H23.wait_for_selector("#offerGo"); H23.click("#offerGo"); w(H23, "CLOUD.state==='linked'&&CLOUD.sync==='idle'")
+    H23.evaluate("sessionStorage.removeItem('__so');go('me');signOutSheet()"); H23.click("#clearOpen"); w(H23, "!!document.getElementById('clrGo')"); H23.click("#clrGo")
+    w(H23, "!localStorage.getItem('questlog')", 12000); pump(2)
+    t("F23 Sign out and clear this device ends only this device (scope local)", H23.evaluate("sessionStorage.getItem('__so')")=="local")
+    t("F24 links get the same 3 px focus outline as buttons", F23.evaluate("[...document.styleSheets].some(s=>[...s.cssRules].some(r=>r.selectorText&&r.selectorText.includes('a:focus-visible')&&/3px/.test(r.cssText)))"))
+    for c_ in (cF, cG, cH): c_.close()
     C.click("#clearOpen")
     t("A13 safe state: confirmation lists what is removed, button enabled, no discard checkbox", w(C, "!!document.getElementById('clrGo')", 6000) and not C.evaluate("document.getElementById('clrGo').disabled") and not C.evaluate("!!document.getElementById('clrOk')") and "does not delete your account" in C.inner_text("#sheet"))
     C.evaluate("closeSheet()")

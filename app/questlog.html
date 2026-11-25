@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src https://ispuunotdlmpduscynsf.supabase.co wss://ispuunotdlmpduscynsf.supabase.co; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src https://ispuunotdlmpduscynsf.supabase.co wss://ispuunotdlmpduscynsf.supabase.co; base-uri 'none'; form-action 'none'">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Questlog</title>
@@ -490,10 +490,36 @@ function sbDb(sb,uid){
 function sbUser(u){return{me:async()=>({id:u.id,name:u.email||""}),id:async()=>u.id}}
 
 // ---- Sign-in (email and password) ----
+// ---- Password rules and optional bot check (F18) ----
+// Existing accounts keep signing in with any password they already have. The new rules apply only to sign-up and reset.
+const PW_MIN_NEW=12,CAPTCHA_SITEKEY="";
+const PW_COMMON=new Set(["password12","password123","password1234","passw0rd123","1234567890","12345678910","123456789012","0123456789","qwertyuiop","qwerty12345","qwertyuiop123","1q2w3e4r5t","1qaz2wsx3e","abcdefghij","abc1234567","iloveyou123","letmein1234","welcome1234","adminadmin","administrator","questlog123","questlog1234","questlogquestlog","changeme123","trustno1234","football123","monkey12345","dragon12345","superman123","princess123"]);
+function pwNewProblem(p,email){
+ if(p.length<PW_MIN_NEW)return"Use at least "+PW_MIN_NEW+" characters for a new password.";
+ const l=p.toLowerCase();
+ if(PW_COMMON.has(l))return"That password is too common. Choose one that is harder to guess.";
+ if(/^(.)\1+$/.test(p))return"Do not repeat one character. Choose a longer phrase.";
+ const who=String(email||"").split("@")[0].toLowerCase();
+ if(who.length>=4&&l.includes(who))return"Do not use your email name inside the password.";
+ return""}
+const WEAK_RE=/weak.?password|pwned|leaked|known to be|easy to guess|should contain/i,CAP_RE=/captcha/i;
+const CAP={id:null,tok:"",p:null};
+const capOn=()=>!!CAPTCHA_SITEKEY;
+function capLoad(){if(CAP.p)return CAP.p;CAP.p=new Promise((ok,no)=>{const s=document.createElement("script");s.src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";s.async=true;s.onload=()=>ok();s.onerror=()=>{CAP.p=null;no(new Error("captcha-load"))};document.head.appendChild(s)});return CAP.p}
+async function capMount(){if(!capOn())return;const box=document.getElementById("authCap");if(!box||box.childElementCount)return;
+ try{await capLoad();if(!window.turnstile||!document.body.contains(box)||box.childElementCount)return;CAP.tok="";
+  CAP.id=window.turnstile.render(box,{sitekey:CAPTCHA_SITEKEY,callback:t=>{CAP.tok=t},"expired-callback":()=>{CAP.tok=""},"error-callback":()=>{CAP.tok=""}})}catch(e){box.textContent="The security check could not load. Check your connection and reload."}}
+function capOpts(o){if(capOn()&&CAP.tok)o.captchaToken=CAP.tok;return o}
+function capReset(){CAP.tok="";try{if(window.turnstile&&CAP.id!=null)window.turnstile.reset(CAP.id)}catch(e){}}
+function capWait(say){if(capOn()&&!CAP.tok){say("Wait a moment for the security check to finish, then try again.");return true}return false}
+function capWatch(){if(!capOn())return;const go=()=>{const b=document.getElementById("authCap");if(b&&!b.childElementCount)capMount()};new MutationObserver(go).observe(document.body,{childList:true,subtree:true});go()}
+if(document.body)capWatch();else document.addEventListener("DOMContentLoaded",capWatch);
+function authErrText(m,code){return CAP_RE.test(m)?"The security check did not pass. Try again.":WEAK_RE.test(m)||code==="weak_password"?"That password is too easy to guess or has appeared in a data leak. Choose a different one.":""}
 function authFormHtml(){return`<p>Sign in to keep your progress in your account and use it on your other devices. Your progress on this device stays as it is.</p>
 <form id="authForm" onsubmit="return authSubmit(event,'in')" novalidate>
 <label class="form-label" for="authEmail">Email</label><input id="authEmail" type="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" required>
-<label class="form-label" for="authPass">Password (at least 6 characters)</label><input id="authPass" type="password" autocomplete="current-password" minlength="6" required>
+<label class="form-label" for="authPass">Password</label><input id="authPass" type="password" autocomplete="current-password" required>
+<p class="mu" id="authHint" style="margin:4px 0 0">Creating an account? Use at least 12 characters.</p><div id="authCap"></div>
 <div class="actions"><button class="btn" id="authIn" type="submit">Sign in</button><button class="btn o" id="authUp" type="button" onclick="authSubmit(event,'up')">Create account</button></div>
 <p class="mu" style="margin:6px 0 0"><button type="button" class="chp" id="authForgot" onclick="forgotPassword()">Forgot password?</button><button type="button" class="chp" id="authResend" style="display:none" onclick="resendConfirm()">Resend confirmation email</button></p><p id="authMsg" class="bad" role="status" aria-live="polite"></p></form>${hasProgress(S)?"":`<p class="mu">New to Questlog? You can also <button type="button" class="btn o" id="authStart" onclick="startLocal()">Start without an account</button></p>`}`}
 function startLocal(){if(!hasProgress(S))wiz(1)}
@@ -502,20 +528,23 @@ async function authSubmit(ev,mode){
  const em=document.getElementById("authEmail"),pw=document.getElementById("authPass"),msg=document.getElementById("authMsg");if(!em||!pw||!msg)return false;
  const email=em.value.trim(),pass=pw.value,say=t=>{msg.textContent=t};
  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){say("Enter a valid email address.");em.focus();return false}
- if(pass.length<6){say("Use a password of at least 6 characters.");pw.focus();return false}
+ if(!pass){say("Enter your password.");pw.focus();return false}
+ if(mode==="up"){const pr=pwNewProblem(pass,email);if(pr){say(pr);pw.focus();return false}}
  if(!window.supabase||!window.supabase.createClient){say("The sign-in library did not load. Check your connection and reload.");return false}
+ if(capWait(say))return false;
  for(const b of ["authIn","authUp"]){const x=document.getElementById(b);if(x)x.disabled=true}
  say(mode==="up"?"Creating your account…":"Signing in…");
  try{
   const sb=sbClient();
-  const r=mode==="up"?await sb.auth.signUp({email,password:pass,options:redirOpts()}):await sb.auth.signInWithPassword({email,password:pass});
+  const r=mode==="up"?await sb.auth.signUp({email,password:pass,options:capOpts(Object.assign({},redirOpts()))}):await sb.auth.signInWithPassword({email,password:pass,options:capOpts({})});
+  capReset();
   if(r.error){
-   const m=String(r.error.message||"");
-   say(/rate limit/i.test(m)?"Too many emails were sent recently. Wait an hour, or sign in if you already have an account.":/not confirmed/i.test(m)?(showResend(),"Confirm your email first: open the link we sent you, then sign in. You can ask for a new link below."):/invalid login/i.test(m)?"That email and password do not match. If you have no account yet, choose Create account.":/already registered|already been registered/i.test(m)?"That email already has an account. Choose Sign in.":/failed to fetch|network/i.test(m)?"Could not reach the sign-in service. Check your connection.":m||"Could not sign in.");
+   const m=String(r.error.message||""),ae=authErrText(m,r.error.code);
+   say(ae?ae:/rate limit/i.test(m)?"Too many emails were sent recently. Wait an hour, or sign in if you already have an account.":/not confirmed/i.test(m)?(showResend(),"Confirm your email first: open the link we sent you, then sign in. You can ask for a new link below."):/invalid login/i.test(m)?"That email and password do not match. If you have no account yet, choose Create account.":/already registered|already been registered/i.test(m)?"That email already has an account. Choose Sign in.":/failed to fetch|network/i.test(m)?"Could not reach the sign-in service. Check your connection.":m||"Could not sign in.");
    for(const b of ["authIn","authUp"]){const x=document.getElementById(b);if(x)x.disabled=false}
    return false}
   if(!r.data||!r.data.session){say("Account created. Check your email to confirm it, then choose Sign in.");showResend();for(const b of ["authIn","authUp"]){const x=document.getElementById(b);if(x)x.disabled=false}return false}
-  CLOUD.msg="";CLOUD.state="init";cloudUI();await cloudInit();
+  CLOUD.msg="";CLOUD.state="init";cloudUI();await cloudInit();if(r.data&&r.data.weakPassword)toast("Your password is weak. Use Forgot password to choose a stronger one.");
  }catch(e){say("Could not sign in: "+((e&&e.message)||"please try again."));for(const b of ["authIn","authUp"]){const x=document.getElementById(b);if(x)x.disabled=false}}
  return false}
 function goSignedOut(){stopListen();clearTimeout(CLOUD.timer);CLOUD.state="signedout";CLOUD.db=null;CLOUD.usr=null;CLOUD.uid=null;CLOUD.name="";CLOUD.cd=null;CLOUD.syncedJson=null;CLOUD.sync="idle";CLOUD.pushing=false;CLOUD.busyOp=false;cloudUI();storageNotice()}
@@ -564,10 +593,11 @@ async function forgotPassword(){
  const email=em.value.trim();
  if(!EMAIL_RE.test(email)){msg.textContent="Enter the email address of your account first.";em.focus();return}
  if(!window.supabase||!window.supabase.createClient){msg.textContent="The sign-in library did not load. Check your connection and reload.";return}
+ if(capWait(t=>{msg.textContent=t}))return;
  msg.textContent="Sending…";
- try{const o={},web=/^https?:$/.test(location.protocol);if(web)o.redirectTo=location.origin+location.pathname;
-  const r=await sbClient().auth.resetPasswordForEmail(email,o);
-  if(r&&r.error){msg.textContent=authText(String(r.error.message||""));return}
+ try{const o={},web=/^https?:$/.test(location.protocol);if(web)o.redirectTo=location.origin+location.pathname;capOpts(o);
+  const r=await sbClient().auth.resetPasswordForEmail(email,o);capReset();
+  if(r&&r.error){const m=String(r.error.message||"");msg.textContent=CAP_RE.test(m)?authErrText(m):authText(m);return}
   msg.textContent="If that email has an account, a reset link is on its way. Open the link in this browser."+(web?"":" This copy is open from a file, so the link may open the project's default page instead of this one.");
  }catch(e){msg.textContent="Could not send the email: "+((e&&e.message)||"try again.")}}
 async function resendConfirm(){
@@ -575,19 +605,20 @@ async function resendConfirm(){
  const email=em.value.trim();
  if(!EMAIL_RE.test(email)){msg.textContent="Enter the email address you signed up with.";em.focus();return}
  if(!window.supabase||!window.supabase.createClient){msg.textContent="The sign-in library did not load. Check your connection and reload.";return}
+ if(capWait(t=>{msg.textContent=t}))return;
  msg.textContent="Sending…";
- try{const r=await sbClient().auth.resend({type:"signup",email,options:redirOpts()});
-  msg.textContent=r&&r.error?authText(String(r.error.message||"")):"A new confirmation link is on its way. Open it, then choose Sign in."}
+ try{const r=await sbClient().auth.resend({type:"signup",email,options:capOpts(Object.assign({},redirOpts()))});capReset();
+  msg.textContent=r&&r.error?(CAP_RE.test(String(r.error.message||""))?authErrText(String(r.error.message)):authText(String(r.error.message||""))):"A new confirmation link is on its way. Open it, then choose Sign in."}
  catch(e){msg.textContent="Could not send the email: "+((e&&e.message)||"try again.")}}
 function recoverySheet(){
- sheet(`<h3>Choose a new password</h3><p class="mu">Use at least 6 characters.</p><form id="recForm" novalidate><label class="form-label" for="recPass">New password</label><input id="recPass" type="password" autocomplete="new-password" minlength="6" required><label class="form-label" for="recPass2">Repeat it</label><input id="recPass2" type="password" autocomplete="new-password" minlength="6" required><p id="recMsg" class="bad" role="status" aria-live="polite"></p><div class="actions"><button class="btn" id="recGo" type="submit">Save new password</button><button class="btn o" type="button" onclick="closeSheet()">Not now</button></div></form>`);
+ sheet(`<h3>Choose a new password</h3><p class="mu">Use at least 12 characters.</p><form id="recForm" novalidate><label class="form-label" for="recPass">New password</label><input id="recPass" type="password" autocomplete="new-password" required><label class="form-label" for="recPass2">Repeat it</label><input id="recPass2" type="password" autocomplete="new-password" required><p id="recMsg" class="bad" role="status" aria-live="polite"></p><div class="actions"><button class="btn" id="recGo" type="submit">Save new password</button><button class="btn o" type="button" onclick="closeSheet()">Not now</button></div></form>`);
  document.getElementById("recForm").onsubmit=async ev=>{
   ev.preventDefault();const a=document.getElementById("recPass").value,b=document.getElementById("recPass2").value,msg=document.getElementById("recMsg"),go=document.getElementById("recGo");
-  if(a.length<6){msg.textContent="Use at least 6 characters.";return}
+  const pr=pwNewProblem(a,CLOUD.name);if(pr){msg.textContent=pr;return}
   if(a!==b){msg.textContent="The two passwords do not match.";return}
   go.disabled=true;msg.textContent="Saving…";
   try{const r=await sbClient().auth.updateUser({password:a});
-   if(r&&r.error){msg.textContent=/different|same/i.test(String(r.error.message))?"Choose a password you have not used before.":authText(String(r.error.message||""));go.disabled=false;return}
+   if(r&&r.error){msg.textContent=/different|same/i.test(String(r.error.message))?"Choose a password you have not used before.":authErrText(String(r.error.message||""),r.error.code)||authText(String(r.error.message||""));go.disabled=false;return}
    closeSheet();toast("Password changed")}
   catch(e){msg.textContent="Could not save: "+((e&&e.message)||"try again.");go.disabled=false}}}
 function deleteAccountSheet(){

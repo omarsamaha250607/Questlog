@@ -2,6 +2,7 @@ import json, time, datetime, sys, re
 from playwright.sync_api import sync_playwright
 
 URL = "http://127.0.0.1:8765/test_sb.html"
+URL_CAP = "http://127.0.0.1:8765/test_sb_cap.html"
 import os, tempfile
 SHOTS = os.path.join(tempfile.gettempdir(), "questlog-shots") + os.sep
 os.makedirs(SHOTS, exist_ok=True)
@@ -14,7 +15,7 @@ USERS = {}      # email -> {id, pw}
 ROWS = {"saves": {}, "save_backups": {}, "restore_points": {}, "devices": {}}   # table -> {(uid,pk): row}
 VERSION = {}    # (table,uid) -> counter, drives the fake realtime
 RPCLOG = []; ATTEMPTS = {}
-FLAGS = {"confirm_on": False, "rate_limit": False, "unconfirmed": set(), "no_delete_fn": False}
+FLAGS = {"weak": False, "confirm_on": False, "rate_limit": False, "unconfirmed": set(), "no_delete_fn": False}
 SENT, DELETED = [], []
 COLS = {"saves": {"user_id","rev","device_id","saved_at","fmt","name","xp","gold","json"},
         "save_backups": {"user_id","kind","saved_at","device_id","json"},
@@ -39,6 +40,7 @@ def server(fail):
     def h0(op, a):
         if fail.get("all"): return {"__throw": "Failed to fetch"}
         if op == "signup":
+            if FLAGS["weak"]: return {"error": {"message": "Password is known to be weak and easy to guess, please choose a different one.", "code": "weak_password"}}
             if FLAGS["rate_limit"]: return {"error": {"message": "email rate limit exceeded", "code": "over_email_send_rate_limit"}}
             if a["email"] in USERS: return {"error": {"message": "User already registered"}}
             uid = "u_" + a["email"].split("@")[0]; USERS[a["email"]] = {"id": uid, "pw": a["password"]}
@@ -131,10 +133,10 @@ FAKE = """(()=>{
  window.supabase={createClient:(url,key,opts)=>{
   const auth={
    getSession:async()=>({data:{session:sess()},error:null}),
-   signInWithPassword:async({email,password})=>{let r;try{r=await call('signin',{email,password})}catch(e){return{data:{session:null},error:{message:'TypeError: Failed to fetch',code:''}}}if(r.error)return{data:{session:null},error:r.error};localStorage.setItem(KEY,JSON.stringify(r.session));return{data:{session:r.session,user:r.session.user},error:null}},
-   signUp:async({email,password,options})=>{window.__lastSignUp=options||null;let r;try{r=await call('signup',{email,password})}catch(e){return{data:{session:null},error:{message:'TypeError: Failed to fetch',code:''}}}if(r.error)return{data:{session:null},error:r.error};if(r.session)localStorage.setItem(KEY,JSON.stringify(r.session));return{data:{session:r.session,user:{id:'x'}},error:null}},
-   resetPasswordForEmail:async(email,o)=>{let r;try{r=await call('reset',{email,redirect:o&&o.redirectTo})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
-   resend:async({type,email,options})=>{window.__lastResend=options||null;let r;try{r=await call('resend',{email})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
+   signInWithPassword:async({email,password,options})=>{window.__lastSignIn=options||null;if(window.__capBad||window.__capRequire&&!(options&&options.captchaToken))return{data:{session:null},error:{message:'captcha verification process failed',code:'captcha_failed'}};let r;try{r=await call('signin',{email,password})}catch(e){return{data:{session:null},error:{message:'TypeError: Failed to fetch',code:''}}}if(r.error)return{data:{session:null},error:r.error};localStorage.setItem(KEY,JSON.stringify(r.session));return{data:{session:r.session,user:r.session.user,weakPassword:window.__weakSignin?{reasons:['pwned']}:undefined},error:null}},
+   signUp:async({email,password,options})=>{window.__lastSignUp=options||null;if(window.__capBad||window.__capRequire&&!(options&&options.captchaToken))return{data:{session:null},error:{message:'captcha verification process failed',code:'captcha_failed'}};let r;try{r=await call('signup',{email,password})}catch(e){return{data:{session:null},error:{message:'TypeError: Failed to fetch',code:''}}}if(r.error)return{data:{session:null},error:r.error};if(r.session)localStorage.setItem(KEY,JSON.stringify(r.session));return{data:{session:r.session,user:{id:'x'}},error:null}},
+   resetPasswordForEmail:async(email,o)=>{window.__lastReset=o||null;if(window.__capBad||window.__capRequire&&!(o&&o.captchaToken))return{data:null,error:{message:'captcha verification process failed',code:'captcha_failed'}};let r;try{r=await call('reset',{email,redirect:o&&o.redirectTo})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
+   resend:async({type,email,options})=>{window.__lastResend=options||null;if(window.__capBad||window.__capRequire&&!(options&&options.captchaToken))return{data:null,error:{message:'captcha verification process failed',code:'captcha_failed'}};let r;try{r=await call('resend',{email})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
    updateUser:async({password})=>{let r;try{r=await call('updateuser',{uid:uid(),password})}catch(e){return{data:null,error:{message:'TypeError: Failed to fetch'}}}return{data:{},error:r.error}},
    signOut:async(o)=>{try{sessionStorage.setItem('__so',(o&&o.scope)||'global')}catch(e){}localStorage.removeItem(KEY);listeners.forEach(f=>f('SIGNED_OUT',null));return{error:null}},
    onAuthStateChange:cb=>{listeners.push(cb);return{data:{subscription:{unsubscribe(){}}}}}};
@@ -149,7 +151,7 @@ FAKE = """(()=>{
   return{auth,from,rpc,channel,removeChannel:c=>{clearInterval(c.timer);chans.delete(c)}}}};
 })();"""
 
-def ctx(browser, uid="u_A", email=None, session=True, local=None, metaseed=None, fail=None, width=390, height=844, scheme="light", lib=True):
+def ctx(browser, uid="u_A", email=None, session=True, local=None, metaseed=None, fail=None, width=390, height=844, scheme="light", lib=True, url=None):
     fail = fail if fail is not None else {}
     c = browser.new_context(viewport={"width": width, "height": height}, is_mobile=width < 600, has_touch=width < 600, color_scheme=scheme)
     c.expose_function("__sb", server(fail))
@@ -168,7 +170,7 @@ def ctx(browser, uid="u_A", email=None, session=True, local=None, metaseed=None,
     p = c.new_page(); PAGES.append(p)
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.on("console", lambda m: errors.append("console:" + m.text) if m.type == "error" else None)
-    p.goto(URL)
+    p.goto(url or URL)
     return c, p, fail
 
 def w(p, expr, timeout=9000):
@@ -196,11 +198,13 @@ with sync_playwright() as pw:
     t("A1 status says Signed out", P.evaluate("cloudStatus().l")=="Signed out")
     P.fill("#authEmail", "nope"); P.fill("#authPass", "secret123"); P.click("#authIn")
     t("A1 invalid email is caught before any request", "valid email" in P.inner_text("#authMsg"))
-    P.fill("#authEmail", "z@test.dev"); P.fill("#authPass", "123"); P.click("#authIn")
-    t("A1 short password is caught", "6 characters" in P.inner_text("#authMsg"))
+    P.fill("#authEmail", "z@test.dev"); P.fill("#authPass", ""); P.click("#authIn")
+    t("A1 empty password is caught", "Enter your password" in P.inner_text("#authMsg"))
+    P.fill("#authPass", "123"); P.click("#authIn")
+    t("F18 sign-in has no minimum length: a short existing password reaches the server", w(P, "document.getElementById('authMsg').innerText.includes('do not match')", 5000))
     P.fill("#authPass", "wrongpass"); P.click("#authIn")
     t("A1 wrong password gives a clear message", w(P, "document.getElementById('authMsg').innerText.includes('do not match')", 5000))
-    FLAGS["rate_limit"] = True; P.fill("#authEmail", "new1@test.dev"); P.fill("#authPass", "secret123"); P.click("#authUp")
+    FLAGS["rate_limit"] = True; P.fill("#authEmail", "new1@test.dev"); P.fill("#authPass", "secret123456"); P.click("#authUp")
     t("A1 email rate limit is explained", w(P, "document.getElementById('authMsg').innerText.includes('Too many emails')", 5000)); FLAGS["rate_limit"] = False
     FLAGS["confirm_on"] = True; P.fill("#authEmail", "new2@test.dev"); P.click("#authUp")
     t("A1 account needing email confirmation says so and does not sign in", w(P, "document.getElementById('authMsg').innerText.includes('Check your email')", 5000) and P.evaluate("CLOUD.state")=="signedout"); FLAGS["confirm_on"] = False
@@ -465,21 +469,76 @@ with sync_playwright() as pw:
     n0 = len(SENT); G.click("#authResend")
     t("A14 resend sends a confirmation email", w(G, "document.getElementById('authMsg').innerText.includes('new confirmation link')", 5000) and SENT[-1][:2] == ("resend", "g1@test.dev") and len(SENT) == n0 + 1); FLAGS["unconfirmed"].discard("g1@test.dev")
     t("F16 resend asks for the Questlog address as the landing page", G.evaluate("(window.__lastResend||{}).emailRedirectTo") == G.evaluate("location.origin+location.pathname"), G.evaluate("JSON.stringify(window.__lastResend)"))
-    FLAGS["confirm_on"] = True; G.fill("#authEmail", "g2@test.dev"); G.click("#authUp")
+    FLAGS["confirm_on"] = True; G.fill("#authEmail", "g2@test.dev"); G.fill("#authPass", "secret123456"); G.click("#authUp")
     t("A14 after sign-up, Resend is offered", w(G, "document.getElementById('authMsg').innerText.includes('Check your email')", 5000) and G.evaluate("document.getElementById('authResend').style.display===''")); FLAGS["confirm_on"] = False
     t("A14 none of this touched local progress", G.evaluate("S.xp===120&&S.name==='Gus'"))
     # recovery link
-    cH, H, _ = ctx(br, uid="u_H1", email="h1@test.dev", local=legacy(xp=60, name="Hal")); H.wait_for_selector("#offerGo"); H.click("#offerGo"); w(H, "CLOUD.state==='linked'")
+    cH, H, _ = ctx(br, uid="u_H1", email="h1@test.dev", local=legacy(xp=60, name="Hal")); USERS["h1@test.dev"]["pw"] = "secret123456"; H.wait_for_selector("#offerGo"); H.click("#offerGo"); w(H, "CLOUD.state==='linked'")
     H.evaluate("window.__fire('PASSWORD_RECOVERY')")
     t("A14 recovery link opens the new-password sheet", w(H, "!!document.getElementById('recPass')", 5000))
     H.fill("#recPass", "abc"); H.fill("#recPass2", "abc"); H.click("#recGo")
-    t("A14 too-short password rejected", "6 characters" in H.inner_text("#recMsg"))
-    H.fill("#recPass", "newpass1"); H.fill("#recPass2", "newpass2"); H.click("#recGo")
+    t("A14 too-short password rejected", "12 characters" in H.inner_text("#recMsg"))
+    t("F18 reset sheet states the 12-character rule", "at least 12 characters" in H.inner_text("#ov"))
+    H.fill("#recPass", "newpass12345"); H.fill("#recPass2", "newpass22345"); H.click("#recGo")
     t("A14 mismatched passwords rejected", "do not match" in H.inner_text("#recMsg"))
-    H.fill("#recPass", "secret123"); H.fill("#recPass2", "secret123"); H.click("#recGo")
+    H.fill("#recPass", "secret123456"); H.fill("#recPass2", "secret123456"); H.click("#recGo")
     t("A14 the old password is refused with a clear message", w(H, "document.getElementById('recMsg').innerText.includes('not used before')", 5000))
-    H.fill("#recPass", "newpass1"); H.fill("#recPass2", "newpass1"); H.click("#recGo")
-    t("A14 new password saved, sheet closes, sign-in kept", w(H, "!document.getElementById('ov').classList.contains('on')", 5000) and "Password changed" in H.inner_text("#toast") and USERS["h1@test.dev"]["pw"] == "newpass1" and H.evaluate("CLOUD.state") == "linked")
+    H.fill("#recPass", "newpass12345"); H.fill("#recPass2", "newpass12345"); H.click("#recGo")
+    t("A14 new password saved, sheet closes, sign-in kept", w(H, "!document.getElementById('ov').classList.contains('on')", 5000) and "Password changed" in H.inner_text("#toast") and USERS["h1@test.dev"]["pw"] == "newpass12345" and H.evaluate("CLOUD.state") == "linked")
+
+
+    # ===== F18: password rules and the optional bot check =====
+    cW, W, _ = ctx(br, uid="u_w1", session=False); W.evaluate("go('me')"); W.wait_for_selector("#authUp")
+    n0 = len(USERS)
+    for pw_, want, nm in [("abc123xyz", "at least 12", "9 characters"), ("Tramp-Gold9", "at least 12", "11 characters (one short)"), ("password1234", "too common", "common password"), ("aaaaaaaaaaaa", "repeat one character", "one repeated character"), ("walter-white-7", "email name", "email name inside")]:
+        W.fill("#authEmail", "walter@test.dev"); W.fill("#authPass", pw_); W.click("#authUp")
+        t("F18 new password refused before any request: " + nm, want in W.inner_text("#authMsg") and len(USERS) == n0 and "walter@test.dev" not in USERS, W.inner_text("#authMsg"))
+    FLAGS["confirm_on"] = True; W.fill("#authEmail", "walter@test.dev"); W.fill("#authPass", "Tramp-Gold99"); W.click("#authUp")
+    t("F18 a strong new password is accepted for sign-up", w(W, "document.getElementById('authMsg').innerText.includes('Check your email')", 5000) and "walter@test.dev" in USERS); FLAGS["confirm_on"] = False
+    FLAGS["weak"] = True; W.fill("#authEmail", "weak1@test.dev"); W.fill("#authPass", "Trampoline-Gold-43"); W.click("#authUp")
+    t("F18 the server's weak or leaked password refusal is explained", w(W, "document.getElementById('authMsg').innerText.includes('too easy to guess')", 5000) and "weak1@test.dev" not in USERS, W.inner_text("#authMsg")); FLAGS["weak"] = False
+    t("F18 sign-in form no longer promises a 6-character minimum", "at least 6" not in W.inner_text("#cloudCard") and "at least 12 characters" in W.inner_text("#cloudCard"))
+    t("F18 bot check is off by default: no widget, no token, no Cloudflare request", W.evaluate("!document.getElementById('authCap').childElementCount&&!window.turnstile&&!document.querySelector('script[src*=cloudflare]')"))
+    cO, O, _ = ctx(br, uid="u_old6", session=False); USERS["old6@test.dev"]["pw"] = "abc123"; O.evaluate("go('me')"); O.wait_for_selector("#authIn")
+    O.fill("#authEmail", "old6@test.dev"); O.fill("#authPass", "abc123"); O.evaluate("window.__weakSignin=true"); O.click("#authIn")
+    t("F18 an existing user with a 6-character password can still sign in", w(O, "CLOUD.state!=='signedout'", 9000) and O.evaluate("sessionStorage.getItem('x')||true"))
+    t("F18 a sign-in that the server flags as weak shows a gentle notice", "weak" in O.inner_text("#toast").lower(), O.inner_text("#toast"))
+    # bot check switched on (test copy with a fake site key and a fake Cloudflare script)
+    TS = """window.turnstile={render:(el,o)=>{window.__tsOpts=o;window.__tsCb=o.callback;el.appendChild(document.createElement('i'));window.__tn=window.__tn||0;setTimeout(()=>o.callback('tok-'+(++window.__tn)),40);return 'w1'},reset:()=>{window.__resets=(window.__resets||0)+1;setTimeout(()=>window.__tsCb('tok-'+(++window.__tn)),40)}};"""
+    cK = br.new_context(viewport={"width": 390, "height": 844}); cK.expose_function("__sb", server({})); cK.route("**/supabase.min.js", lambda r: r.fulfill(body="", content_type="application/javascript")); cK.add_init_script(FAKE)
+    cK.route("https://challenges.cloudflare.com/**", lambda r: r.fulfill(body=TS, content_type="application/javascript"))
+    USERS["cap1@test.dev"] = {"id": "u_cap1", "pw": "secret123"}
+    K2 = cK.new_page(); PAGES.append(K2); K2.on("pageerror", lambda e: errors.append(str(e))); K2.goto(URL_CAP); K2.evaluate("go('me')")
+    t("F18 bot check: widget appears and the site key is passed", w(K2, "!!window.__tsOpts&&document.getElementById('authCap').childElementCount>0", 6000) and K2.evaluate("window.__tsOpts.sitekey") == "TEST-SITE-KEY")
+    w(K2, "!!CAP.tok", 4000)
+    K2.fill("#authEmail", "cap1@test.dev"); K2.fill("#authPass", "secret123"); K2.click("#authIn")
+    t("F18 bot check: sign-in sends the token and still works for a 9-character legacy password", w(K2, "CLOUD.state!=='signedout'", 9000) and K2.evaluate("(window.__lastSignIn||{}).captchaToken") == "tok-1", K2.evaluate("JSON.stringify(window.__lastSignIn)"))
+    cK.close()
+    cK2 = br.new_context(viewport={"width": 390, "height": 844}); cK2.expose_function("__sb", server({})); cK2.route("**/supabase.min.js", lambda r: r.fulfill(body="", content_type="application/javascript")); cK2.add_init_script(FAKE)
+    cK2.route("https://challenges.cloudflare.com/**", lambda r: r.fulfill(body=TS, content_type="application/javascript"))
+    K3 = cK2.new_page(); PAGES.append(K3); K3.on("pageerror", lambda e: errors.append(str(e))); K3.goto(URL_CAP); K3.evaluate("go('me')"); w(K3, "!!CAP.tok", 6000)
+    K3.fill("#authEmail", "cap2@test.dev"); K3.fill("#authPass", "Trampoline-Gold-44"); FLAGS["confirm_on"] = True; K3.click("#authUp")
+    t("F18 bot check: sign-up sends the token", w(K3, "document.getElementById('authMsg').innerText.includes('Check your email')", 6000) and K3.evaluate("(window.__lastSignUp||{}).captchaToken") == "tok-1", K3.evaluate("JSON.stringify(window.__lastSignUp)")); FLAGS["confirm_on"] = False
+    t("F18 bot check: the widget is reset after use and a fresh token arrives (tokens are single use)", w(K3, "window.__resets>=1&&CAP.tok==='tok-2'", 4000))
+    K3.click("#authForgot"); t("F18 bot check: password reset sends a token", w(K3, "(window.__lastReset||{}).captchaToken==='tok-2'", 5000), K3.evaluate("JSON.stringify(window.__lastReset)"))
+    w(K3, "CAP.tok==='tok-3'", 4000); K3.evaluate("showResend()"); K3.click("#authResend")
+    t("F18 bot check: resend confirmation sends a token", w(K3, "(window.__lastResend||{}).captchaToken==='tok-3'", 5000), K3.evaluate("JSON.stringify(window.__lastResend)"))
+    w(K3, "CAP.tok==='tok-4'", 4000); K3.evaluate("CAP.tok=''"); n1 = len(USERS); K3.fill("#authEmail", "cap3@test.dev"); K3.click("#authUp")
+    t("F18 bot check: submitting before the check finishes waits instead of sending", "security check to finish" in K3.inner_text("#authMsg") and len(USERS) == n1)
+    K3.evaluate("CAP.tok='x';window.__capBad=true"); K3.fill("#authEmail", "cap1@test.dev"); K3.fill("#authPass", "secret123"); K3.click("#authIn")
+    t("F18 bot check: a failed check is explained without leaking details", w(K3, "document.getElementById('authMsg').innerText.includes('security check did not pass')", 5000)); K3.evaluate("window.__capBad=false")
+    cK2.close()
+    cK3 = br.new_context(viewport={"width": 390, "height": 844}); cK3.expose_function("__sb", server({})); cK3.route("**/supabase.min.js", lambda r: r.fulfill(body="", content_type="application/javascript")); cK3.add_init_script(FAKE)
+    cK3.route("https://challenges.cloudflare.com/**", lambda r: r.abort())
+    K4 = cK3.new_page(); PAGES.append(K4); K4.goto(URL_CAP); K4.evaluate("go('me')")
+    t("F18 bot check: if Cloudflare cannot load, the form says so and nothing is sent", w(K4, "document.getElementById('authCap').innerText.includes('could not load')", 6000))
+    K4.fill("#authEmail", "cap1@test.dev"); K4.fill("#authPass", "secret123"); K4.click("#authIn")
+    t("F18 bot check: failing closed shows a waiting message, not a crash", "security check" in K4.inner_text("#authMsg"))
+    cK3.close()
+    html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app", "questlog.html"), encoding="utf-8").read()
+    t("F18 shipped file: bot check is off (empty site key) and the new password minimum is 12", 'CAPTCHA_SITEKEY=""' in html and "PW_MIN_NEW=12" in html)
+    csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html).group(1)
+    t("F18 security policy: only Cloudflare Turnstile was added; no other host", set(re.findall(r"https://[a-z.]+", csp)) == {"https://challenges.cloudflare.com", "https://ispuunotdlmpduscynsf.supabase.co"} and "form-action 'none'" in csp, csp)
 
     # ===== A15: delete my account =====
     cX, X, fX = ctx(br, uid="u_X1", email="x1@test.dev", local=legacy(xp=410, name="Xan")); X.wait_for_selector("#offerGo"); X.click("#offerGo"); w(X, "CLOUD.state==='linked'&&CLOUD.sync==='idle'")

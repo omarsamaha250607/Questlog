@@ -8,3 +8,6 @@ s = s[:a] + "<!--SUPABASE-BUNDLE-START--><!--SUPABASE-BUNDLE-END-->" + s[b + len
 assert "script-src 'unsafe-inline'" in s
 s = s.replace("script-src 'unsafe-inline'", "script-src 'unsafe-inline' 'unsafe-eval'", 1)
 (root / "tests" / "test_sb.html").write_text(s, encoding="utf-8"); print("wrote tests/test_sb.html", len(s))
+# Second copy with the bot check switched on (a fake site key), used only by the F18 tests.
+assert s.count('CAPTCHA_SITEKEY=""') == 1
+(root / "tests" / "test_sb_cap.html").write_text(s.replace('CAPTCHA_SITEKEY=""', 'CAPTCHA_SITEKEY="TEST-SITE-KEY"'), encoding="utf-8")

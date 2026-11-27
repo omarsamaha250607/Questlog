@@ -8,6 +8,12 @@ s = s[:a] + "<!--SUPABASE-BUNDLE-START--><!--SUPABASE-BUNDLE-END-->" + s[b + len
 assert "script-src 'unsafe-inline'" in s
 s = s.replace("script-src 'unsafe-inline'", "script-src 'unsafe-inline' 'unsafe-eval'", 1)
 (root / "tests" / "test_sb.html").write_text(s, encoding="utf-8"); print("wrote tests/test_sb.html", len(s))
-# Second copy with the bot check switched on (a fake site key), used only by the F18 tests.
-assert s.count('CAPTCHA_SITEKEY=""') == 1
-(root / "tests" / "test_sb_cap.html").write_text(s.replace('CAPTCHA_SITEKEY=""', 'CAPTCHA_SITEKEY="TEST-SITE-KEY"'), encoding="utf-8")
+# The shipped file may carry the real public Turnstile site key. Test copies never use it:
+# the default copy has the bot check OFF (empty key); a second copy has it ON with a fake key.
+import re as _re
+_pat = _re.compile(r'CAPTCHA_SITEKEY="[^"]*"')
+assert len(_pat.findall(s)) == 1
+s_off = _pat.sub('CAPTCHA_SITEKEY=""', s)
+s_on = _pat.sub('CAPTCHA_SITEKEY="TEST-SITE-KEY"', s)
+(root / "tests" / "test_sb.html").write_text(s_off, encoding="utf-8")
+(root / "tests" / "test_sb_cap.html").write_text(s_on, encoding="utf-8")

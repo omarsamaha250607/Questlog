@@ -536,7 +536,9 @@ with sync_playwright() as pw:
     t("F18 bot check: failing closed shows a waiting message, not a crash", "security check" in K4.inner_text("#authMsg"))
     cK3.close()
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app", "questlog.html"), encoding="utf-8").read()
-    t("F18 shipped file: bot check is off (empty site key) and the new password minimum is 12", 'CAPTCHA_SITEKEY=""' in html and "PW_MIN_NEW=12" in html)
+    m_key = re.search(r'CAPTCHA_SITEKEY="([^"]*)"', html)
+    t("F18 shipped file: the site key is empty or a public Turnstile key (0x4...), never a test key, and the new password minimum is 12", bool(m_key) and (m_key.group(1) == "" or re.fullmatch(r"0x4[A-Za-z0-9_-]{15,40}", m_key.group(1)) is not None) and "TEST-SITE-KEY" not in html and "PW_MIN_NEW=12" in html)
+    t("F18 shipped file: no secret-looking values (no sb_secret, no service_role, no Turnstile secret label)", not re.search(r"sb_secret|service_role|turnstile.?secret", html, re.I))
     csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html).group(1)
     t("F18 security policy: only Cloudflare Turnstile was added; no other host", set(re.findall(r"https://[a-z.]+", csp)) == {"https://challenges.cloudflare.com", "https://ispuunotdlmpduscynsf.supabase.co"} and "form-action 'none'" in csp, csp)
 

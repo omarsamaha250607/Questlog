@@ -492,7 +492,7 @@ function sbUser(u){return{me:async()=>({id:u.id,name:u.email||""}),id:async()=>u
 // ---- Sign-in (email and password) ----
 // ---- Password rules and optional bot check (F18) ----
 // Existing accounts keep signing in with any password they already have. The new rules apply only to sign-up and reset.
-const PW_MIN_NEW=12,CAPTCHA_SITEKEY="";
+const PW_MIN_NEW=12,CAPTCHA_SITEKEY="0x4AAAAAAGVrE-1666tQ9g0C";
 const PW_COMMON=new Set(["password12","password123","password1234","passw0rd123","1234567890","12345678910","123456789012","0123456789","qwertyuiop","qwerty12345","qwertyuiop123","1q2w3e4r5t","1qaz2wsx3e","abcdefghij","abc1234567","iloveyou123","letmein1234","welcome1234","adminadmin","administrator","questlog123","questlog1234","questlogquestlog","changeme123","trustno1234","football123","monkey12345","dragon12345","superman123","princess123"]);
 function pwNewProblem(p,email){
  if(p.length<PW_MIN_NEW)return"Use at least "+PW_MIN_NEW+" characters for a new password.";

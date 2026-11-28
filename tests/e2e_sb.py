@@ -504,7 +504,7 @@ with sync_playwright() as pw:
     t("F18 an existing user with a 6-character password can still sign in", w(O, "CLOUD.state!=='signedout'", 9000) and O.evaluate("sessionStorage.getItem('x')||true"))
     t("F18 a sign-in that the server flags as weak shows a gentle notice", "weak" in O.inner_text("#toast").lower(), O.inner_text("#toast"))
     # bot check switched on (test copy with a fake site key and a fake Cloudflare script)
-    TS = """window.turnstile={render:(el,o)=>{window.__tsOpts=o;window.__tsCb=o.callback;el.appendChild(document.createElement('i'));window.__tn=window.__tn||0;setTimeout(()=>o.callback('tok-'+(++window.__tn)),40);return 'w1'},reset:()=>{window.__resets=(window.__resets||0)+1;setTimeout(()=>window.__tsCb('tok-'+(++window.__tn)),40)}};"""
+    TS = """window.turnstile={render:(el,o)=>{window.__rc=(window.__rc||0)+1;window.__tsOpts=o;window.__tsCb=o.callback;el.appendChild(document.createElement('i'));window.__tn=window.__tn||0;setTimeout(()=>o.callback('tok-'+(++window.__tn)),40);return 'w1'},reset:()=>{window.__resets=(window.__resets||0)+1;setTimeout(()=>window.__tsCb('tok-'+(++window.__tn)),40)}};"""
     cK = br.new_context(viewport={"width": 390, "height": 844}); cK.expose_function("__sb", server({})); cK.route("**/supabase.min.js", lambda r: r.fulfill(body="", content_type="application/javascript")); cK.add_init_script(FAKE)
     cK.route("https://challenges.cloudflare.com/**", lambda r: r.fulfill(body=TS, content_type="application/javascript"))
     USERS["cap1@test.dev"] = {"id": "u_cap1", "pw": "secret123"}
@@ -527,6 +527,16 @@ with sync_playwright() as pw:
     t("F18 bot check: submitting before the check finishes waits instead of sending", "security check to finish" in K3.inner_text("#authMsg") and len(USERS) == n1)
     K3.evaluate("CAP.tok='x';window.__capBad=true"); K3.fill("#authEmail", "cap1@test.dev"); K3.fill("#authPass", "secret123"); K3.click("#authIn")
     t("F18 bot check: a failed check is explained without leaking details", w(K3, "document.getElementById('authMsg').innerText.includes('security check did not pass')", 5000)); K3.evaluate("window.__capBad=false")
+    # F26: a periodic card refresh must not destroy a running bot check or its token
+    K5 = cK2.new_page(); PAGES.append(K5); K5.on("pageerror", lambda e: errors.append(str(e))); K5.goto(URL_CAP); K5.evaluate("go('me')"); w(K5, "!!CAP.tok", 6000)
+    rc0 = K5.evaluate("window.__rc"); tok0 = K5.evaluate("CAP.tok"); K5.evaluate("document.getElementById('authCap').firstElementChild.id='keepme'")
+    for _ in range(3): K5.evaluate("cloudUI()")
+    t("F26 bot check: refreshing the Profile card keeps the same widget element (no redraw)", K5.evaluate("!!document.getElementById('keepme')") and K5.evaluate("window.__rc") == rc0, K5.evaluate("window.__rc"))
+    t("F26 bot check: refreshing the card keeps the token", K5.evaluate("CAP.tok") == tok0)
+    K5.evaluate("CLOUD.state='init';cloudUI();CLOUD.state='signedout';cloudUI()")
+    t("F26 bot check: when the card really changes it is rebuilt and a fresh widget and token appear", w(K5, "window.__rc>=%d&&!!CAP.tok" % (rc0 + 1), 6000) and not K5.evaluate("!!document.getElementById('keepme')"))
+    K5.evaluate("window.__rc0=window.__rc"); K5.fill("#authEmail", "typed@test.dev"); K5.focus("#authEmail"); K5.evaluate("cloudUI()")
+    t("F26 bot check: typing in the form is never wiped by a refresh", K5.input_value("#authEmail") == "typed@test.dev")
     cK2.close()
     cK3 = br.new_context(viewport={"width": 390, "height": 844}); cK3.expose_function("__sb", server({})); cK3.route("**/supabase.min.js", lambda r: r.fulfill(body="", content_type="application/javascript")); cK3.add_init_script(FAKE)
     cK3.route("https://challenges.cloudflare.com/**", lambda r: r.abort())

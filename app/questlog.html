@@ -507,7 +507,7 @@ const CAP={id:null,tok:"",p:null};
 const capOn=()=>!!CAPTCHA_SITEKEY;
 function capLoad(){if(CAP.p)return CAP.p;CAP.p=new Promise((ok,no)=>{const s=document.createElement("script");s.src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";s.async=true;s.onload=()=>ok();s.onerror=()=>{CAP.p=null;no(new Error("captcha-load"))};document.head.appendChild(s)});return CAP.p}
 async function capMount(){if(!capOn())return;const box=document.getElementById("authCap");if(!box||box.childElementCount)return;
- try{await capLoad();if(!window.turnstile||!document.body.contains(box)||box.childElementCount)return;CAP.tok="";
+ try{await capLoad();if(!window.turnstile||!document.body.contains(box)||box.childElementCount)return;CAP.tok="";{const cc=document.getElementById("cloudCard");if(cc)cc.dataset.h=cloudCardHtml()}
   CAP.id=window.turnstile.render(box,{sitekey:CAPTCHA_SITEKEY,callback:t=>{CAP.tok=t},"expired-callback":()=>{CAP.tok=""},"error-callback":()=>{CAP.tok=""}})}catch(e){box.textContent="The security check could not load. Check your connection and reload."}}
 function capOpts(o){if(capOn()&&CAP.tok)o.captchaToken=CAP.tok;return o}
 function capReset(){CAP.tok="";try{if(window.turnstile&&CAP.id!=null)window.turnstile.reset(CAP.id)}catch(e){}}
@@ -714,7 +714,9 @@ function cloudCardHtml(){const st=CLOUD.state,s=cloudStatus(),m=meta();
 function cloudUI(){
  if(typeof TAB!=="undefined"&&TAB==="home"&&CLOUD.homeState!==CLOUD.state){CLOUD.homeState=CLOUD.state;try{render()}catch(e){}}
  const b=document.getElementById("cloudBtn");if(b){const s=cloudStatus();b.setAttribute("aria-label","Cloud saving: "+s.t);b.title="Cloud saving: "+s.t;b.style.color=s.c}
- const c=document.getElementById("cloudCard");if(c&&!(CLOUD.state==="signedout"&&c.contains(document.activeElement)&&document.getElementById("authForm")))c.innerHTML=cloudCardHtml();
+ const c=document.getElementById("cloudCard");if(c&&!(CLOUD.state==="signedout"&&c.contains(document.activeElement)&&document.getElementById("authForm"))){const h=cloudCardHtml(),cb=document.getElementById("authCap");
+  // Keep a running bot check alive: rebuilding the card would destroy the widget and its token (F26). Rebuild only when the card's content really changed.
+  if(!(capOn()&&CLOUD.state==="signedout"&&cb&&cb.childElementCount&&c.dataset.h===h)){c.innerHTML=h;c.dataset.h=h}}
  const n=document.getElementById("cloudNotice");if(n){
   if(CLOUD.state==="conflict"){n.hidden=false;n.innerHTML=`<b>Your account and this browser have different progress</b><p>Syncing is paused and nothing has been overwritten. Review both copies and choose which to keep.</p><div class="actions"><button class="btn" onclick="conflictSheet()">Review copies</button></div>`}
   else if(CLOUD.state==="blocked"){n.hidden=false;n.innerHTML=`<b>Your account copy was not loaded</b><p>${esc(CLOUD.msg)}</p><div class="actions"><button class="btn o" onclick="downloadCloud()">Download account copy</button></div>`}
